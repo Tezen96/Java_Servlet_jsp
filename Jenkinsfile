@@ -1,87 +1,59 @@
 pipeline {
     agent any
 
-    environment {
-        DOCKER_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKER_IMAGE = 'suresh53/esewa'
-        BUILD_TAG = "${BUILD_NUMBER}"
-    }
-
     stages {
-        stage('Checkout') {
+        // 1. Code लिने
+        stage('Get Code') {
             steps {
-                echo '📦 Cloning repository...'
                 checkout scm
-                sh 'ls -la'
             }
         }
 
-        stage('Build WAR') {
+        // 2. WAR बनाउने
+        stage('Build') {
             steps {
-                echo '🔨 Building WAR with Maven...'
                 sh 'mvn clean package -DskipTests'
             }
         }
 
-        stage('Build Docker Image') {
+        // 3. Docker Image बनाउने
+        stage('Docker Build') {
             steps {
-                echo '🐳 Building Docker image...'
-                sh """
-                    docker build -t ${DOCKER_IMAGE}:${BUILD_TAG} .
-                    docker tag ${DOCKER_IMAGE}:${BUILD_TAG} ${DOCKER_IMAGE}:latest
-                """
+                sh "docker build -t suresh53/esewa:${BUILD_NUMBER} ."
+                sh "docker tag suresh53/esewa:${BUILD_NUMBER} suresh53/esewa:latest"
             }
         }
 
-        stage('Push to Docker Hub') {
+        // 4. Docker Hub मा Push गर्ने
+        stage('Push') {
             steps {
-                echo '⬆️ Pushing to Docker Hub...'
-                sh """
-                    echo \$DOCKER_CREDENTIALS_PSW | docker login -u \$DOCKER_CREDENTIALS_USR --password-stdin
-                    docker push ${DOCKER_IMAGE}:${BUILD_TAG}
-                    docker push ${DOCKER_IMAGE}:latest
-                """
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    sh 'echo $PASS | docker login -u $USER --password-stdin'
+                    sh "docker push suresh53/esewa:${BUILD_NUMBER}"
+                    sh "docker push suresh53/esewa:latest"
+                }
             }
         }
 
-        stage('Deploy to Kubernetes') {
+        // 5. Kubernetes मा Deploy गर्ने
+        stage('Deploy') {
             steps {
-                echo '🚀 Deploying to Kubernetes...'
-                sh """
-                    cat deployment.yaml | sed 's|image: suresh53/esewa:.*|image: ${DOCKER_IMAGE}:${BUILD_TAG}|g' | kubectl apply -f -
-                    kubectl apply -f service.yaml
-                    kubectl rollout status deployment/esewa-app --timeout=2m
-                """
+                sh "sed 's|suresh53/esewa:.*|suresh53/esewa:${BUILD_NUMBER}|' deployment.yaml | /usr/local/bin/kubectl apply -f -"
+                sh "/usr/local/bin/kubectl apply -f service.yaml"
             }
         }
 
-        stage('Verify') {
+        // 6. Check गर्ने
+        stage('Check') {
             steps {
-                echo '✅ Verifying deployment...'
-                sh """
-                    echo "=== Pods ==="
-                    kubectl get pods -l app=esewa
-                    echo ""
-                    echo "=== Service ==="
-                    kubectl get svc esewa-service
-                    echo ""
-                    echo "=== Access URL ==="
-                    minikube service esewa-service --url || true
-                """
+                sh '/usr/local/bin/kubectl get pods'
             }
         }
     }
 
     post {
-        success {
-            echo '🎉 Pipeline completed successfully!'
-            echo "✅ Deployed: ${DOCKER_IMAGE}:${BUILD_TAG}"
-        }
-        failure {
-            echo '❌ Pipeline failed!'
-        }
         always {
-            sh 'docker logout || true'
+            sh 'docker logout'
         }
     }
 }
